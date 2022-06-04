@@ -6,6 +6,7 @@ import re
 from cogs.utility import Utility as util
 import strings
 import time
+from replit import db
 
 class Gambling(commands.Cog):
   def __init__(self, client:commands.Bot):
@@ -18,7 +19,8 @@ class Gambling(commands.Cog):
   @commands.command(aliases = ["flips","slots","f"])
   async def flip(self, ctx, amount, side:str = None):
     bot_commands = await self.client.fetch_channel(334046255384887296)
-    user_dict = await util.get_user_data()
+    #user_dict = await util.get_user_data()
+    user_dict = db["user_dict"]
     user = user_dict[str(ctx.author.id)]
     rob = user_dict[str(906087821373239316)]
     wrong_room = None
@@ -27,28 +29,30 @@ class Gambling(commands.Cog):
     paul_bonus = 0
 
     amount = await util.get_value(ctx,amount,user["balance"])
-  
-    if amount == user["balance"]:
-      paul = True
-    else:
-      if ctx.author in Gambling.paulers:
-        Gambling.paulers.remove(ctx.author)
     
-    #Caps the max flip
+    #Caps the max flip.
     max_alert = ""
     max_bet = 100000
     if amount > max_bet:
       amount = max_bet
       max_alert = f"Your bet was capped at {max_bet:,}"
 
-    #Assigns the side
+    #Paul bonus.
+    if amount == user["balance"]:
+      paul = True
+    else:
+      if ctx.author in Gambling.paulers:
+        Gambling.paulers.remove(ctx.author)
+
+    #Assigns the side.
     if side != None:
       if side.lower().startswith("h"):
         bet = "heads"
       elif side.lower().startswith("t"):
         bet = "tails"
       else:
-        bet = random.choice(["heads","tails"])
+        await util.embed_error(ctx,f"`{side}` is not a valid side! Try `h` or `t`.")
+        return
     else:
       bet = random.choice(["heads","tails"])
     
@@ -74,7 +78,7 @@ class Gambling(commands.Cog):
       message = "sloans have been removed from your account!"
       outcome_colour = discord.Colour.red()
     
-    if ctx.author in Gambling.paulers:
+    if ctx.author in Gambling.paulers and max_alert == "":
       paul_bonus = round(amount*0.25)
     if ctx.channel != bot_commands and win == True:
       penalty = round(amount*0.25)
@@ -108,7 +112,7 @@ class Gambling(commands.Cog):
     loser["stat_flip_quantity"] += 1
     loser["stat_flip_defeat"] += 1
     
-    await util.save_user_data(user_dict)
+    #await util.save_user_data(user_dict)
     
     balance = user["balance"]
     if bet == "heads":
@@ -132,7 +136,7 @@ class Gambling(commands.Cog):
     title = f":{emoji}: Flip | {flip.capitalize()}",
     icon_url = ctx.author.avatar_url,)
     embed.add_field(name = f"You {outcome}!", value = f"**${amount + paul_bonus:,}** {message}\nYour new balance is ${balance:,}.", inline = True)
-    if win == True and paul == True:
+    if win == True and paul == True and max_alert == "":
       paul_text = ":star: Incoming Paul Bonus!"
       if paul_bonus > 0:
         paul_text = f":star2: Paul Bonus! +${paul_bonus:,}"
@@ -159,9 +163,6 @@ class Gambling(commands.Cog):
 
 
 
-
-
-
   active = False
   message = None
   pot = 0
@@ -170,8 +171,10 @@ class Gambling(commands.Cog):
   time_remaining = 120
   @commands.command(aliases = ["jack","pot","j","jake","jp"])
   async def jackpot(self, ctx, amount):
-    user_dict = await util.get_user_data()
+    #user_dict = await util.get_user_data()
+    user_dict = db["user_dict"]
     user = user_dict[str(ctx.author.id)]
+    rob = user_dict[str(906087821373239316)]
     amount = await util.get_value(ctx,amount,user["balance"])
     max_time = 120
     
@@ -183,14 +186,18 @@ class Gambling(commands.Cog):
       Gambling.participants.update( {ctx.author.id:{"account":ctx.author,"amount":amount}} )
       Gambling.message = await self.create_jackpot(ctx, Gambling.activity_log, Gambling.participants)
       user["balance"] -= amount
-      await util.save_user_data(user_dict)
+      #rob holds the bet temporarily so the sloans don't vanish into the void.
+      rob["balance"] += amount
+      #await util.save_user_data(user_dict)
       Gambling.active = True
       status = await self.wait_for_players(ctx)
       if status == False:
         user_dict = await util.get_user_data()
         user = user_dict[str(ctx.author.id)]
+        rob = user_dict[str(906087821373239316)]
         user["balance"] += Gambling.pot
-        await util.save_user_data(user_dict)
+        rob["balance"] -= Gambling.pot
+        #await util.save_user_data(user_dict)
         await self.reset_jackpot()
         return
       await self.start_timer()
@@ -199,10 +206,6 @@ class Gambling(commands.Cog):
     
     #For adding to the game.
     else:
-      old_pot = Gambling.pot
-      Gambling.pot += amount
-      user["balance"] -= amount
-      await util.save_user_data(user_dict)
 
       #If a new user has entered the pot, creates a dictionary entry for them.
       #Otherwise the amount is summed to the already existing entry.
@@ -215,6 +218,13 @@ class Gambling(commands.Cog):
         new_user = True
       if new_user == True:
         Gambling.participants.update( {ctx.author.id:{"account":ctx.author,"amount":amount}} )
+
+      old_pot = Gambling.pot
+      Gambling.pot += amount
+      user["balance"] -= amount
+      rob["balance"] += amount
+      #MIGHT need this, we'll see.
+      #await util.save_user_data(user_dict)
       
       #handles the activity log.
       Gambling.activity_log.pop(0)
@@ -239,7 +249,6 @@ class Gambling(commands.Cog):
       await self.edit_jackpot()
 
   
-  
   async def wait_for_players(self, ctx):
     try:
       input = await self.client.wait_for("message", check = lambda m: len(Gambling.participants) > 1 or m.author == ctx.author and m.content.lower() == "$cancel", timeout=300)
@@ -249,6 +258,7 @@ class Gambling(commands.Cog):
     if input.content.lower() == "$cancel":
         await util.embed_message(ctx,":no_entry:","Cancelled",f"Successfully cancelled jackpot!")
         return False
+
       
   async def start_timer(self):
     while Gambling.time_remaining >= 1:
@@ -256,6 +266,7 @@ class Gambling(commands.Cog):
       Gambling.time_remaining -= 1
       await self.edit_jackpot()
 
+  
   async def payout(self):
     players = []
     odds = []
@@ -271,10 +282,13 @@ class Gambling(commands.Cog):
     amount = Gambling.participants[winner.id]["amount"]
     chance = amount / pot * 100
 
-    user_dict = await util.get_user_data()
+    #user_dict = await util.get_user_data()
+    user_dict = db["user_dict"]
     #winner stats
     user = user_dict[str(winner.id)]
+    rob = user_dict[str(906087821373239316)]
     user["balance"] += pot
+    rob["balance"] -= pot
     user["stat_jackpot_profit"] += pot
     user["stat_jackpot_quantity"] += 1
     user["stat_jackpot_victory"] += 1
@@ -282,7 +296,6 @@ class Gambling(commands.Cog):
       user["stat_jackpot_highest_win"] = pot
     if user["stat_jackpot_lowest_odds_victory"] > chance:
       user["stat_jackpot_lowest_odds_victory"] = chance
-
     #loser stats
     for player in Gambling.participants:
       if player != winner.id:
@@ -290,7 +303,6 @@ class Gambling(commands.Cog):
         user_dict[str(player)]["stat_jackpot_defeat"] += 1
         user_dict[str(player)]["stat_jackpot_quantity"] += 1
   
-    
     odds_string = str(f"{chance:.20f}")
     zeros = len(re.search('\d+\.(0*)', odds_string).group(1))
     extra_zeros = 2
@@ -300,7 +312,8 @@ class Gambling(commands.Cog):
     odds = f"{chance:.{zeros+extra_zeros}f}"
     winner = {"name":winner.name,"odds":odds}
     await self.edit_jackpot(winner)
-    await util.save_user_data(user_dict)
+    #await util.save_user_data(user_dict)
+
   
   async def create_jackpot(self, ctx, activity_log:list, participants:dict):
     embed = discord.Embed(
@@ -371,9 +384,6 @@ class Gambling(commands.Cog):
     Gambling.participants = {}
     Gambling.time_remaining = 120
       
-      
-     
-    
 
 def setup(client:commands.Bot):
   client.add_cog(Gambling(client))

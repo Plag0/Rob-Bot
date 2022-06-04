@@ -1,7 +1,8 @@
 from discord.ext import commands
 import discord
 import asyncio
-import random
+#import random
+from replit import db
 from cogs.utility import Utility as util
 from cogs.rewards import Rewards as rewards
 
@@ -151,9 +152,11 @@ class Interactions(commands.Cog):
                         await reward.whack_a_rob()
     """
     await rewards.passive_income(message)
-    await rewards.whack_a_rob(client)
+    #i = random.randint(0,125)
+    #if i == 21:
+      #await rewards.whack_a_rob(client)
     #if not message.content.startswith(client.command_prefix):
-      #await util.activity_update(message)
+    await util.activity_update(message)
 
 
 

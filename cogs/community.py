@@ -1,8 +1,11 @@
 from discord.ext import commands
 import discord
 import asyncio
+import json
+from replit import db
 from cogs.utility import Utility as util
-
+from cogs.use import Use as use
+from cogs.frontend import Frontend as front
 class Community(commands.Cog):
   def __init__(self, client):
     self.client = client
@@ -12,7 +15,8 @@ class Community(commands.Cog):
     if ctx.author.id == mention.id:
       await util.embed_error(ctx, "You can't donate to yourself!")
       return None
-    user_dict = await util.get_user_data()
+    #user_dict = await util.get_user_data()
+    user_dict = db["user_dict"]
     sender = user_dict[str(ctx.author.id)]
     receiver = user_dict[str(mention.id)]
     if amount.lower() == "all" or amount.lower() == "paul":
@@ -33,7 +37,7 @@ class Community(commands.Cog):
     if amount > sender["stat_highest_give_sent"]:
       sender["stat_highest_give_sent"] = amount
       sender["stat_highest_give_sent_user"] = str(mention.id)
-    await util.save_user_data(user_dict)
+    #await util.save_user_data(user_dict)
     
     sender_loss = sender["stat_give_loss"]
     receiver_total_profit = receiver["stat_give_profit"]
@@ -48,106 +52,113 @@ class Community(commands.Cog):
   
   
   @commands.command(aliases = ["purchase"])
-  async def buy(self, ctx, upgrade):
-    #[0] is core amount
-    #[1] is quantity
-    #[2] is is price
-    #[3] is increment
-    #[4] is max upgrade
-    #[5] is single use true or false
-    #[6] is emoji
-  
-    user_dict = await util.get_user_data()
+  async def buy(self, ctx, *upgrade):
+    if len(upgrade) <= 0:
+      await front.shop(self, ctx)
+      return
+      
+    #user_dict = await util.get_user_data()
+    user_dict = db["user_dict"]
     user = user_dict[str(ctx.author.id)]
     rob = user_dict[str(906087821373239316)]
-    upgrade = await util.get_upgrade(ctx,upgrade,user)
-    upgrade_name = upgrade.split("_")
-  
-    quantity = user[upgrade][1]
-    price = user[upgrade][2]
-    increment = user[upgrade][3]
-    max_level = user[upgrade][4]
-    single_use = user[upgrade][5]
-    emoji = user[upgrade][6]
-  
-    #generates the price for the restore upgrade
-    if "restore" in upgrade_name[1]:
-      streak = user["stat_highest_daily_streak"]
-      streak_bonus = user["upgrade_streak"][0]
-      amount = (streak*(streak+1)/2)*(10+streak_bonus)
-      price = round(amount + amount*.5)
-  
-    if price > user["balance"]:
-      await util.embed_error(ctx,f"You can't afford {upgrade_name[1]}!")
+    upgrade_req = await util.get_upgrade(ctx,user,*upgrade)
+    if upgrade_req == None:
       return
-    elif quantity >= max_level:
-      await util.embed_error(ctx,f"{upgrade_name[1]} is max level!")
-      return
-    else:
+    upgrade = upgrade_req[0]
+    quantity = upgrade_req[1] or 1
+    upgrade_name = upgrade_req[2]
+
+    quantity_string = ""
+    if quantity > 1:
+        quantity_string = f"{quantity} "
+
+    with open("upgrades.json","r") as f:
+      d = json.load(f)
+      upgrade_data = d[upgrade]
+
+    for i in range(quantity):
+      max_level = upgrade_data["max_level"]
+      emoji = upgrade_data["emoji"]
+      single_use = upgrade_data["single_use"]
+      level = user[upgrade]["level"]
+      if single_use:
+        price = upgrade_data["price"]
+      else:
+        price = user[upgrade]["price"]
+      
+      #Generates the price for the restore upgrade.
+      if "restore" in upgrade_name.lower():
+        streak = user["stat_highest_daily_streak"]
+        percent = user["upgrade_streak"]["amount"]
+        amount = streak*(streak+1)/2 * 10 + streak*(streak+1)/2 * 10 * percent*0.01
+        price = round(amount + amount*.5)
+    
+      if price > user["balance"]:
+        await util.embed_error(ctx,f"You can't afford **{quantity_string}{upgrade_name}**!")
+        return
+      elif level >= max_level:
+        await util.embed_error(ctx,f"{upgrade_name} is max level!")
+        return
+      
       user["balance"] -= price
       rob["balance"] += price
       user["stat_upgrade_loss"] -= price
-      #sums 1 to quantity
-      user[upgrade][1] +=1
-      quantity = user[upgrade][1]
-      #core value increases by the value of the increment x quantity
-      level = ""
+      #Sums 1 to the level.
+      user[upgrade]["level"] +=1
+      level = user[upgrade]["level"]
+      #Increase amount & price.
       consumable = ""
-      if single_use == 0:
-        user[upgrade][0] += increment*quantity
-        level = f" Level {quantity}"
-      elif single_use == 1:
-        consumable = f" \n\n{upgrade_name[1].capitalize()} is a single-use, non-expiring item. To activate this item, type **$use** followed by the item name.\n\nExample Message:```$use {upgrade_name[1].lower()}```\n\n***TIP**: If you want to be incognito, try doing this command in my DMs!*"
+      level_msg = ""
+      if single_use:
+        consumable = f" \n\n{upgrade_name} is a single-use, non-expiring item.\nTo activate this item, type `$use {upgrade_name.lower()}`\n\n***TIP**: You can hide your activity by doing this command in my DMs!*"
+      else:
+        user[upgrade]["amount"] = upgrade_data["amounts"][str( level )]
+        user[upgrade]["price"] = upgrade_data["prices"][str( level )]
+        level_msg = f" Level {level}"
       
-      #price sums itself
-      if single_use == 0:
-        user[upgrade][2] += user[upgrade][2]
-      elif "restore" in upgrade_name[1]:
-        user[upgrade][2] = user["stat_highest_daily_streak"]
-      
-      await util.save_user_data(user_dict)
-      
-      balance = user["balance"]
-      embed = discord.Embed(
-      colour = discord.Colour.green(),
-      title = f":shopping_bags: Purchase Successful!",
-      description = f"You bought **{emoji} {upgrade_name[1].capitalize()}{level}** for **-${price:,}**!\nYou now have ${balance:,}{consumable}")
-      
-      #extra info for upgradeable items
-      #"or "gold" is added because gold level 1 is not < max_level but I still want it to run.
-      if single_use == 0 and quantity < max_level or single_use == 0 and "gold" in upgrade_name[1]:
-        next_level = ""
-        current_bonus = user[upgrade][0]
-        next_bonus = increment*(quantity+1)
+      if "restore" in upgrade_name.lower():
+        user[upgrade]["amount"] = user["stat_highest_daily_streak"]
+    
+    #await util.save_user_data(user_dict)
+    embed = discord.Embed(
+    colour = discord.Colour.green(),
+    title = f":shopping_bags: Purchase Successful!",
+    description = f"You bought **{quantity_string}{emoji} {upgrade_name}{level_msg}** for **-${price*quantity:,}**!\nYou have ${user['balance']:,} remaining.{consumable}")
+    
+    #Extra info for upgradeable items.
+    #"gold" is included in this statement because gold level 1 is max_level but I still want it to run.
+    if single_use == False and level < max_level   or   single_use == False and "gold" in upgrade_name.lower():
+      next_level = ""
+      current_amount = user[upgrade]["amount"]
+      next_amount = upgrade_data["amounts"][str( level+1 )]
+      next_price = upgrade_data["prices"][str( level )]
+
+      if "gold" in upgrade_name.lower():
+        next_level = f"\nNext Level: **+ {next_amount}%** :lock: Play 15 more games to unlock the next level!\n\n***IMPORTANT:** For this upgrade to work, make sure you have `Display current activity as a status message` enabled in User Settings > Activity Status*"
+        embed.add_field(name = "Stats", value = f"Current Level: **+ {current_amount}%**{next_level}")
+        #free name change to set up your profile.
+        user["upgrade_change_lol"]["level"] += 1
+        await use.use(self, ctx, "change")
+        #await util.save_user_data(user_dict)
+      elif "streak" in upgrade_name.lower() or "cooldown" in upgrade_name.lower():
+        next_level = f"\nNext Level: **+ {next_amount}%** :lock: ${next_price:,}"
+        embed.add_field(name = "Stats", value = f"Current Level: **+ {current_amount}%**{next_level}")
+      else:
+        next_level = f"\nNext Level: **+ ${next_amount:,}** :lock: ${next_price:,}"
+        embed.add_field(name = "Stats", value = f"Current Level: **+ ${current_amount:,}**{next_level}")
+    
+    embed.set_footer(icon_url = ctx.author.avatar_url, text = f"Purchased by {ctx.author.name}")
+    await ctx.channel.send(embed=embed)
+
   
-        if "gold" in upgrade_name[1]:
-          level = user["upgrade_gold_transmutation"][1]
-          percent = 1
-          i=0
-          while i < level:
-            percent += percent*.43
-            i+=1
-          percent = round(percent,1)
-          next_level = f"\nNext Level: **+ {percent}%** :lock: Play 15 more games to unlock the next level!\n\n***IMPORTANT:** For this upgrade to work, make sure you have `Display current activity as a status message` enabled in User Settings > Activity Status*"
-          embed.add_field(name = "Stats", value = f"Current Level: **+ {current_bonus}%**{next_level}")
-          #free name change to set up your profile.
-          user["upgrade_change_lol"][1] += 1
-          await util.use(ctx,"change")
-          await util.save_user_data(user_dict)
-        elif "streak" in upgrade_name[1]:
-          next_level = f"\nNext Level: **+ {next_bonus+current_bonus}0%** :lock: ${price*2:,}"
-          embed.add_field(name = "Stats", value = f"Current Level: **+ {current_bonus}0%**{next_level}")
-        elif "cooldown" in upgrade_name[1]:
-          next_level = f"\nNext Level: **+ {100 - 100*.95**(quantity+1)}%** :lock: ${price*2:,}"
-          embed.add_field(name = "Stats", value = f"Current Level: **+ {100 - 100*.95**quantity}%**{next_level}")
-        else:
-          next_level = f"\nNext Level: **+ ${next_bonus+current_bonus:,}** :lock: ${price*2:,}"
-          embed.add_field(name = "Stats", value = f"Current Level: **+ ${current_bonus:,}**{next_level}")
-      
-      embed.set_footer(icon_url = ctx.author.avatar_url, text = f"Purchased by {ctx.author.name}")
-      await ctx.channel.send(embed=embed)
+  #@commands.command(aliases = ["pfp", "pic", "picture"])
+  #async def avatar(self, ctx, mention:discord.User = None):
+    #account = mention or ctx.author
+    #user_dict = await util.get_user_data()
+    #user = user_dict[str(account.id)]
+    #await ctx.channel.send(user.avatar_url)
 
-
+    
   """
   @commands.command(aliases = ["endorse"])
   async def rep(self, ctx, *mentions:discord.User, amount = None):

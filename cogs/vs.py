@@ -4,6 +4,7 @@ import requests
 import asyncio
 import html
 import random
+from replit import db
 from cogs.utility import Utility as util
 #import json
 
@@ -12,74 +13,116 @@ class Vs(commands.Cog):
     self.client = client
 
   cooldown = []
-  gamemodes = ["flip","trivia"]
   @commands.command(aliases = ["challenge"])
   async def vs(self, ctx, mention:discord.User, game:str, amount, *data):
-    if ctx.author in self.cooldown:
-      await util.embed_error(ctx, "You can only host one challenge at a time!")
+    user_dict = db["user_dict"]
+    host = user_dict[str(ctx.author.id)]
+    opponent = user_dict[str(mention.id)]
+    amount = await util.get_value(ctx,amount,host["balance"])
+
+    gamemodes = {
+      "flip":Vs.flip_1v1,
+      "trivia":Vs.trivia_1v1}
+    
+    #Exception Handling
+    if opponent["balance"] < amount:
+      await util.embed_error(ctx, f"{mention.mention}'s balance is too low!")
       return
     if ctx.author == mention:
       await util.embed_error(ctx, "You can't challenge yourself!")
       return
-    Vs.cooldown.append(ctx.author)
-    user_dict = await util.get_user_data()
-    host = user_dict[str(ctx.author.id)]
-    opponent = user_dict[str(mention.id)]
-    if amount.lower() == "all" or amount.lower() == "paul":
-      amount = host["balance"]
-    try:
-      amount = await util.get_value(ctx,amount,host["balance"])
-    except Exception as e:
-      print(f"Handling Exception: {e}")
-      Vs.cooldown.remove(ctx.author)
+    if game.lower() not in gamemodes:
+      await util.embed_error(ctx, f"Unknown gamemode: `{game}`")
       return
-    if game.lower() in Vs.gamemodes:
-      r = 255
-      g = 170
-      b = 1
-      if game.lower() == "flip":
-        emoji = "💸"
-        if data != None:
-          if data == "h":
-            data = "Heads"
-          elif data == "t":
-            data = "Tails"
-      elif game.lower() == "trivia":
-        emoji = "🧠"
-        r = 152
-        g = 251
-        b = 152
-    else:
-      await util.embed_error(ctx,f"Unknown gamemode: `{game}`")
-      Vs.cooldown.remove(ctx.author)
-      return
-
+      
+    if game.lower() == "flip":
+      name = "Coin Flip"
+      emoji = "🎲"
+      colour = discord.Colour.from_rgb(255,201,74)
+      title = "❓ Side"
+      if len(data) <= 0:
+        choice = "Random Side"
+        data = {"side":random.choice(["heads","tails"])}
+      else:
+        if len(data) > 1:
+          await util.embed_error(ctx, f"Invalid data for **Flip**: `{data[1]}`")
+          return
+        if data[0].lower() == "h" or data[0].lower() == "heads":
+          choice = "Heads"
+          title = "<:heads:981507458944098345> Side"
+        elif data[0].lower() == "t" or data[0].lower() == "tails":
+          choice = "Tails"
+          title = "<:tails:981507300047065088> Side"
+        else:
+          await util.embed_error(ctx, f"`{data[0]}` is not a valid side! Try `h` or `t`.")
+          return
+        data = {"side":choice.lower()}
+        
+    elif game.lower() == "trivia":
+      name = "Trivia Quiz"
+      emoji = "🧠"
+      colour = discord.Colour.from_rgb(255,201,74)
+      title = f"❓ Category"
+      categories = {"Geography": (22,'🌏'), "General": (9,'🧩'), "Games": (15,'🎮'), "Films": (11,'🎞'), "TV":(14,'🎬'), "Science": (17,'🧪'), "Computers": (18,'🖥'), "Sports":(21,'🏀'), "History": (23,'🗿'), "Animals":(27,'🐶'), "Vehicles":(28,'🚗'), "Anime":(31,'🎌'), "Cartoons":(32,'✏')}
+      if len(data) <= 0:
+        choice = "*Random Category*"
+        null, category = random.choice(list(categories.items()))
+        #correct_answer = list(answers.keys())[list(answers.values()).index(html.unescape(trivia['correct_answer']))].lower()
+        data = {"category":category[0], "emoji":category[1], "win_thresh":1}
+      else:
+        if len(data) > 2:
+          await util.embed_error(ctx, f"Invalid data for **Trivia**: `{data[2]}`")
+          return
+        found = False
+        for key in categories:
+          if data[0].lower() in key.lower():
+            category = categories[key][0]
+            category_emoji = categories[key][1]
+            choice = key
+            found = True
+            break
+        if found == False:
+          await util.embed_error(ctx,f"Unknown category for Trivia: `{data[0]}`")
+          return
+        if len(data) == 2:
+          try:
+            win_thresh = int(data[1])
+            if win_thresh > 100:
+              raise ValueError
+          except:
+            await util.embed_error(ctx,f"Invalid amount of rounds: `{data[1]}`")
+            return
+        else:
+          win_thresh = 1
+        data = {"category":category, "emoji":category_emoji, "win_thresh":win_thresh}
+        title = f"{category_emoji} Category"
+    
+    #Host win rate.
     total_games = host[f"stat_{game.lower()}_victory"] + host[f"stat_{game.lower()}_defeat"]
     if total_games != 0:
       host_winrate = round((host[f"stat_{game.lower()}_victory"] / total_games) * 100, 1)
     else:
       host_winrate = 0
-
+    #Opponent win rate.
     total_games = opponent[f"stat_{game.lower()}_victory"] + opponent[f"stat_{game.lower()}_defeat"]
     if total_games != 0:
       opponent_winrate = round((opponent[f"stat_{game.lower()}_victory"] / total_games) * 100, 1)
     else:
       opponent_winrate = 0
 
-    host_winrate = f" *({host_winrate}% WR)*"
-    opponent_winrate = f" *({opponent_winrate}% WR)*"
+    host_winrate = f" {host_winrate}%"
+    opponent_winrate = f" {opponent_winrate}%"
       
     embed = discord.Embed(
-    colour = discord.Colour.from_rgb(r,g,b),
-    title = f":crossed_swords: Challenge | {emoji} {game.split('_')[0].capitalize()}",
-    description = f"**{ctx.author.name}**{host_winrate} has challenged **{mention.name}**{opponent_winrate} to a duel!\n\nTo accept this challenge, mention {ctx.author.name} and type accept.\nExample: `accept @{ctx.author.name}`\n\n***TIP**: To cancel or decline this challenge, type **$cancel** or **$decline***")
-    embed.add_field(name = "**:game_die: Gamemode:**", value = f"{game.capitalize().split('_')[0]}", inline = True)
-    embed.add_field(name = "**:moneybag: Amount:**", value = f"${amount:,}", inline = True)
+    colour = colour,
+    title = f":crossed_swords: {game.split('_')[0].capitalize()} Challenge",
+    description = f"**{ctx.author.name}** has challenged **{mention.name}** to a **{name}**\n{ctx.author.mention} **{host_winrate} VS {opponent_winrate}** {mention.mention}\n\nTo accept this challenge, mention {ctx.author.name} and type accept.\nExample: `accept @{ctx.author.name}`\n\n***TIP**: To cancel or decline this challenge, type **$cancel** or **$decline***")
+    embed.add_field(name = f"{emoji} Gamemode", value = f"{name}", inline = True)
+    embed.add_field(name = "**:moneybag: Wager**", value = f"${amount:,} Sloans", inline = True)
     if len(data) >= 1:
-      embed.add_field(name = "**:black_joker: Host's Choice:**", value = f"{data[0].capitalize()}", inline = True) 
+      embed.add_field(name = title, value = choice, inline = True) 
     if len(data) >= 2:
-      embed.add_field(name = f"**🎯 Best of {(int(data[1])*2)-1}:**", value = f"First player to answer {data[1]} questions correctly wins.", inline = False) 
-  
+      embed.add_field(name = f"**🎯 Best of {(data['win_thresh']*2)-1}:**", value = f"First to **{data['win_thresh']}**", inline = True) 
     await ctx.channel.send(embed=embed)
     
     def validate(m):
@@ -88,47 +131,23 @@ class Vs(commands.Cog):
       input = await self.client.wait_for("message",check=validate,timeout=60.0)
     except asyncio.TimeoutError:
       await util.embed_error(ctx,f"{ctx.author.mention}'s challenge has been cancelled. {mention.mention} didn't accept in time.")
-      Vs.cooldown.remove(ctx.author)
       return
     if input.content.lower() == "$cancel" or input.content.lower() == "$decline":
       await util.embed_message(ctx,":no_entry:","Cancelled",f"{input.author.name} has cancelled the challenge.")
-      Vs.cooldown.remove(ctx.author)
       return
-    gamemodes = {
-      "flip":Vs.flip_1v1,
-      "trivia":Vs.trivia
-    }
-    await gamemodes[game](ctx,mention,host,opponent,amount,data)
-    #await globals()[game.lower()](ctx,mention,host,opponent,amount,data)
-    await util.save_user_data(user_dict)
+    if ctx.author in Vs.cooldown:
+      await util.embed_error(ctx, "You can't participate in multiple challenges at once!")
+      return
+    Vs.cooldown.append(ctx.author)
+    await gamemodes[game](self, ctx, mention, amount, data)
     if ctx.author in Vs.cooldown:
       Vs.cooldown.remove(ctx.author)
   
-  async def flip_1v1(ctx,mention,host,opponent,amount,data):
-    #Caps the max flip
-    max_alert = ""
-    max_bet = 1000000
-    if amount > max_bet:
-      amount = max_bet
-      max_alert = f"Your bet was capped at {max_bet:,}"
-  
-    if opponent["balance"] < amount:
-      await util.embed_error(ctx,f"{mention.mention}'s balance is too low!")
-      Vs.cooldown.remove(ctx.author)
-      return
-  
-    #Most of this literally isn't necessary but the human part of me feels
-    #like this makes it more fair.
-    if len(data) >=1:
-      side = data[0]
-      if side.startswith("h"):
-        host_bet = "heads"
-      elif side.startswith("t"):
-        host_bet = "tails"
-      else:
-        host_bet = random.choice(["heads","tails"])
-    else:
-      host_bet = random.choice(["heads","tails"])
+  async def flip_1v1(self, ctx, mention, amount, data):
+    user_dict = db["user_dict"]
+    host = user_dict[str(ctx.author.id)]
+    opponent = user_dict[str(mention.id)]
+    host_bet = data["side"]
     
     flip = random.choice(["heads","tails"])
       
@@ -176,53 +195,33 @@ class Vs(commands.Cog):
     embed = discord.Embed(
     colour = discord.Colour.magenta(),
     title = f":money_with_wings: Flip | {flip.capitalize()}")
-    embed.add_field(name = f"{discord_winner.name} wins!", value = f"**${amount:,}** has been added to {discord_winner.name}'s account!\n\n{discord_winner.name}'s new balance is $**{winner_balance:,}**.\n{discord_loser.name}'s new balance is $**{loser_balance:,}**.", inline = True)
+    embed.add_field(name = f"{discord_winner.name} wins!", value = f"**${amount:,}** has been added to {discord_winner.name}'s account!\n{discord_winner.name}'s new balance is $**{winner_balance:,}**.\n{discord_loser.name}'s new balance is $**{loser_balance:,}**.", inline = True)
     if winstreak >= 3:
       embed.add_field(name = f":tada: Win Streak!",value = f"{discord_winner.name} is on a **{winstreak}** flip win streak!", inline = False)
     embed.set_thumbnail(url = coin)
-    embed.set_footer(icon_url = icon, text = f"{ctx.author.name} vs {mention.name} {max_alert}")
+    embed.set_footer(icon_url = icon, text = f"{ctx.author.name} vs {mention.name}")
     await ctx.channel.send(embed=embed)
   
   
   
   
-  async def trivia(ctx,mention,host,opponent,amount,data):
-    if opponent["balance"] < amount:
-      await util.embed_error(ctx,f"{mention.mention}'s balance is too low!")
-      Vs.cooldown.remove(ctx.author)
-      return
-    
-    categories = {"Geography": (22,'🌏'), "General": (9,'🧩'), "Games": (15,'🎮'), "Films": (11,'🎞'), "TV":(14,'🎬'), "Science": (17,'🧪'), "Computers": (18,'🖥'), "Sports":(21,'🏀'), "History": (23,'🗿'), "Animals":(27,'🐶'), "Vehicles":(28,'🚗'), "Anime":(31,'🎌'), "Cartoons":(32,'✏')}
-  
-    if len(data) >= 1:
-      found = False
-      for key in categories:
-        if data[0].lower() in key.lower():
-          category = categories[key][0]
-          cat_emoji = categories[key][1]
-          found = True
-      if found != True:
-        await util.embed_error(ctx,f"Game failed to start.\nUnknown category for Trivia: `{data[0]}`")
-        Vs.cooldown.remove(ctx.author)
-        return
-    else:
-      #default category
-      category = 22
+  async def trivia_1v1(self, ctx, mention, amount, data):
+    user_dict = db["user_dict"]
+    host = user_dict[str(ctx.author.id)]
+    opponent = user_dict[str(mention.id)]
     
     host_wins = 0
     opponent_wins = 0
-    win_thresh = 1
+    win_thresh = data["win_thresh"]
     final_score = ""
-    if len(data) >= 2:
-      win_thresh = int(data[1])
     while win_thresh > host_wins and win_thresh > opponent_wins:
-      url = f'https://opentdb.com/api.php?amount=1&category={category}'
+      url = f"https://opentdb.com/api.php?amount=1&category={data['category']}"
       req = requests.get(url)
       trivia = req.json()["results"][0]
     
       embed = discord.Embed(
       colour = discord.Colour.green(),
-      title = f"{cat_emoji} Trivia | {trivia['category']}",
+      title = f"{data['emoji']} Trivia | {trivia['category']}",
       description = f"Difficulty: **{trivia['difficulty'].capitalize()}**\n\n{html.unescape(trivia['question'])}")
       if trivia['type'] == "multiple":
         answer_list = []
@@ -252,6 +251,7 @@ class Vs(commands.Cog):
       except asyncio.TimeoutError:
         Vs.cooldown.remove(ctx.author)
         await util.embed_error(ctx,f"Challenge cancelled. No one answered in time.")
+        return
       
       print(f"{input.content.lower()},{correct_answer} by {input.author.name}")
       wrong_message = ""
@@ -325,7 +325,7 @@ class Vs(commands.Cog):
     embed = discord.Embed(
     colour = discord.Colour.green(),
     title = f":earth_asia: Trivia | {trivia['category']}")
-    embed.add_field(name = f"{winner.name} wins!", value = f"{wrong_message}{final_score}**${amount:,}** has been added to {winner.name}'s account!\n\n{winner.name}'s new balance is $**{winner_balance:,}**.\n{loser.name}'s new balance is $**{loser_balance:,}**.", inline = True)
+    embed.add_field(name = f"{winner.name} wins!", value = f"{wrong_message}{final_score}**${amount:,}** has been added to {winner.name}'s account!\n{winner.name}'s new balance is $**{winner_balance:,}**.\n{loser.name}'s new balance is $**{loser_balance:,}**.", inline = True)
     if winstreak >= 3:
       embed.add_field(name = f":tada: Win Streak!",value = f"{winner.name} is on a **{winstreak}** trivia win streak!", inline = False)
     embed.set_footer(icon_url = icon, text = f"{ctx.author.name} vs {mention.name}")
@@ -335,8 +335,8 @@ class Vs(commands.Cog):
   
   
   
-  @commands.command(aliases = ["trivia"])
-  async def triviainfo(self, ctx):
+  @commands.command()
+  async def trivia(self, ctx):
     command_help = "Trivia is a 1v1 gamemode that can be played using the $vs command.\nIn Trivia, both players are presented with a random question from a category of the host's choosing. The first player to answer the question correctly wins a point. If you answer incorrectly the other player wins that point.\n\nTo challenge someone to a game of Trivia, format the command as follows: ```$vs (@mention) trivia (bet) (category*) (points to win*)```*Arguments followed by an asterisk are optional.*\n\nReal Example:```$vs @Molasso trivia 100 geography 3```\n"
     categories = {"Geography": (22,'🌏'), "General": (9,'🧩'), "Games": (15,'🎮'), "Films": (11,'🎞'), "TV":(14,'🎬'), "Science": (17,'🧪'), "Computers": (18,'🖥'), "Sports":(21,'🏀'), "History": (23,'🗿'), "Animals":(27,'🐶'), "Vehicles":(28,'🚗'), "Anime":(31,'🎌'), "Cartoons":(32,'✏')}
     message = ""

@@ -1,4 +1,5 @@
 import os
+from os import system
 try:
   import nacl
 except ImportError:
@@ -21,11 +22,11 @@ except ImportError:
 from discord_components import DiscordComponents, ComponentsBot, Button, SelectOption, Select
 import discord
 import asyncio
-import tracemalloc
-from keep_alive import keep_alive
 from discord.ext import commands
+#import tracemalloc
 
-tracemalloc.start()
+
+#tracemalloc.start()
 intents = discord.Intents.default()
 intents.members = True
 intents.presences = True
@@ -43,6 +44,10 @@ async def on_ready():
       client.load_extension(f"cogs.{fn[:-3]}")
       print(f"Loaded {fn}")
   print("Finished")
+
+  from cogs.timer import Timer as timer
+  for guild in client.guilds:
+    await timer.claim_timer(client, guild)
 
 @client.command()
 @commands.is_owner()
@@ -62,14 +67,18 @@ async def reload(ctx, extension):
   client.reload_extension(f"cogs.{extension}")
   print("Reloaded cog!")
 
-from cogs.interactions import Interactions as int
+from cogs.interactions import Interactions as inter
 
 @client.event
 async def on_message(message):
   if message.author == client.user:
     return
   await client.process_commands(message)
-  await int.check_message(client, message)
+  await inter.check_message(client, message)
 
-keep_alive()
-client.run(os.environ['TOKEN'])
+try:
+  client.run(os.environ['TOKEN'])
+except discord.errors.HTTPException:
+    print("\n\n\nBLOCKED BY RATE LIMITS\nRESTARTING NOW\n\n\n")
+    system("server_restarter.py")
+    system('kill 1')

@@ -11,6 +11,8 @@ discord = "^1.7.3"
 Flask = "^2.0.2"
 replit = "^3.2.4"
 strings-pkg = "^0.0.1"
+gTTS = "^2.2.4"
+mutagen = "^1.45.1"
 
 [tool.poetry.dev-dependencies]
 
