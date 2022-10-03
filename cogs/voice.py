@@ -43,5 +43,5 @@ class Voice(commands.Cog):
     await asyncio.sleep(audio.info.length)
     await self.leave(ctx)
 
-def setup(client):
-  client.add_cog(Voice(client))
+async def setup(client):
+  await client.add_cog(Voice(client))

@@ -4,21 +4,30 @@ import requests
 import asyncio
 import html
 import random
-from replit import db
+from datetime import datetime
 from cogs.utility import Utility as util
-#import json
+from cogs.rewards import Rewards as rewards
+from discord import Button
 
 class Vs(commands.Cog):
   def __init__(self, client):
     self.client = client
-
+  
   cooldown = []
   @commands.command(aliases = ["challenge"])
   async def vs(self, ctx, mention:discord.User, game:str, amount, *data):
-    user_dict = db["user_dict"]
+    # I want the colours of the winning embeds to be picked by users as their custom colour elsewhere.
+    user_dict = await util.get_user_data()
     host = user_dict[str(ctx.author.id)]
+    if host["rob_banned"] == True:
+      await util.embed_rob_banned(ctx, "You don't have permission to perform this action")
+      return
+  
     opponent = user_dict[str(mention.id)]
     amount = await util.get_value(ctx,amount,host["balance"])
+
+    # This ID is used in the custom button IDs.
+    unique_id = str(datetime.now())
 
     gamemodes = {
       "flip":Vs.flip_1v1,
@@ -59,6 +68,7 @@ class Vs(commands.Cog):
         data = {"side":choice.lower()}
         
     elif game.lower() == "trivia":
+      rand = False
       name = "Trivia Quiz"
       emoji = "🧠"
       colour = discord.Colour.from_rgb(255,201,74)
@@ -67,12 +77,13 @@ class Vs(commands.Cog):
       if len(data) <= 0:
         choice = "*Random Category*"
         null, category = random.choice(list(categories.items()))
-        #correct_answer = list(answers.keys())[list(answers.values()).index(html.unescape(trivia['correct_answer']))].lower()
         data = {"category":category[0], "emoji":category[1], "win_thresh":1}
+        
       else:
-        if len(data) > 2:
+        if len(data) >= 3:
           await util.embed_error(ctx, f"Invalid data for **Trivia**: `{data[2]}`")
           return
+          
         found = False
         for key in categories:
           if data[0].lower() in key.lower():
@@ -81,9 +92,19 @@ class Vs(commands.Cog):
             choice = key
             found = True
             break
+            
+        if data[0].lower() == "random":
+          choice = "*Random Category*"
+          null, c = random.choice(list(categories.items()))
+          category = c[0]
+          category_emoji = c[1]
+          found = True
+          rand = True
+          
         if found == False:
           await util.embed_error(ctx,f"Unknown category for Trivia: `{data[0]}`")
           return
+          
         if len(data) == 2:
           try:
             win_thresh = int(data[1])
@@ -95,7 +116,8 @@ class Vs(commands.Cog):
         else:
           win_thresh = 1
         data = {"category":category, "emoji":category_emoji, "win_thresh":win_thresh}
-        title = f"{category_emoji} Category"
+        if rand == False:
+          title = f"{category_emoji} Category"
     
     #Host win rate.
     total_games = host[f"stat_{game.lower()}_victory"] + host[f"stat_{game.lower()}_defeat"]
@@ -112,49 +134,95 @@ class Vs(commands.Cog):
 
     host_winrate = f" {host_winrate}%"
     opponent_winrate = f" {opponent_winrate}%"
-      
+
+    fields = 0
     embed = discord.Embed(
     colour = colour,
     title = f":crossed_swords: {game.split('_')[0].capitalize()} Challenge",
-    description = f"**{ctx.author.name}** has challenged **{mention.name}** to a **{name}**\n{ctx.author.mention} **{host_winrate} VS {opponent_winrate}** {mention.mention}\n\nTo accept this challenge, mention {ctx.author.name} and type accept.\nExample: `accept @{ctx.author.name}`\n\n***TIP**: To cancel or decline this challenge, type **$cancel** or **$decline***")
+    description = f"**{ctx.author.name}** has challenged **{mention.name}** to a **{name}**!\n\n{ctx.author.mention} **{host_winrate} VS {opponent_winrate}** {mention.mention}")
     embed.add_field(name = f"{emoji} Gamemode", value = f"{name}", inline = True)
     embed.add_field(name = "**:moneybag: Wager**", value = f"${amount:,} Sloans", inline = True)
+    embed.add_field(name = '\u200b', value = '\u200b', inline = True)
     if len(data) >= 1:
       embed.add_field(name = title, value = choice, inline = True) 
+      fields += 1
     if len(data) >= 2:
-      embed.add_field(name = f"**🎯 Best of {(data['win_thresh']*2)-1}:**", value = f"First to **{data['win_thresh']}**", inline = True) 
-    await ctx.channel.send(embed=embed)
+      embed.add_field(name = f"**🎯 Best of {(data['win_thresh']*2)-1}:**", value = f"First to **{data['win_thresh']}**", inline = True)
+      fields += 1
     
-    def validate(m):
-      return m.author == mention and ("accept") in m.content.lower() and ctx.author.mentioned_in(m) or m.author == mention and "$decline" in m.content.lower() or m.author == ctx.author and "$cancel" in m.content.lower()
+    if fields == 1:
+      embed.add_field(name = '\u200b', value = '\u200b', inline = True)
+      embed.add_field(name = '\u200b', value = '\u200b', inline = True)
+    elif fields == 2:
+      embed.add_field(name = '\u200b', value = '\u200b', inline = True)
+      
+    
+    msg = await ctx.channel.send(embed=embed, components = [[
+      Button(label=f"Accept", style="3", emoji="✅", custom_id=f"accept_1v1_{unique_id}"),
+      Button(label=f"Decline", style="4", emoji="⛔", custom_id=f"cancel_1v1_{unique_id}")
+    ]])
+    
     try:
-      input = await self.client.wait_for("message",check=validate,timeout=60.0)
+      interaction = await self.client.wait_for(
+          "button_click", 
+          check = lambda i: i.custom_id == f"accept_1v1_{unique_id}" and i.user == mention   or   i.custom_id == f"cancel_1v1_{unique_id}" and i.user == mention   or   i.custom_id == f"cancel_1v1_{unique_id}" and i.user == ctx.author, 
+          timeout=120
+          )
     except asyncio.TimeoutError:
-      await util.embed_error(ctx,f"{ctx.author.mention}'s challenge has been cancelled. {mention.mention} didn't accept in time.")
+      embed.add_field(name="❌ Timed Out!",value=f"{ctx.author.mention}'s challenge has been cancelled. {mention.mention} didn't accept in time.", inline = False)
+      embed.colour = discord.Colour.red()
+      await msg.edit(embed=embed, components=[])
       return
-    if input.content.lower() == "$cancel" or input.content.lower() == "$decline":
-      await util.embed_message(ctx,":no_entry:","Cancelled",f"{input.author.name} has cancelled the challenge.")
+    
+    if interaction.custom_id == f"cancel_1v1_{unique_id}":
+      title = "Declined"
+      desc = f"{mention.mention} declined this challenge."
+      if interaction.user == ctx.author:
+        title = "Cancelled"
+        desc = f"{ctx.author.mention} cancelled this challenge."
+      embed.add_field(name=f"⛔ {title}!", value=f"{desc}", inline = False)
+      embed.colour = discord.Colour.red()
+      await msg.edit(embed=embed, components=[])
       return
-    if ctx.author in Vs.cooldown:
-      await util.embed_error(ctx, "You can't participate in multiple challenges at once!")
-      return
-    Vs.cooldown.append(ctx.author)
-    await gamemodes[game](self, ctx, mention, amount, data)
-    if ctx.author in Vs.cooldown:
-      Vs.cooldown.remove(ctx.author)
+    
+    elif interaction.custom_id == f"accept_1v1_{unique_id}":
+      if ctx.author in Vs.cooldown or mention in Vs.cooldown:
+        embed.add_field(name="❌ Error!", value="You can't participate in multiple challenges at once!", inline = False)
+        embed.colour = discord.Colour.red()
+        await msg.edit(embed=embed, components=[])
+        return
+      # Re-checking balances to verify nothing has changed.
+      user_dict = await util.get_user_data()
+      host = user_dict[str(ctx.author.id)]
+      opponent = user_dict[str(mention.id)]
+      if amount > host["balance"] or amount > opponent["balance"]:
+        name = "User"
+        if amount > host["balance"]:
+          name = f"{ctx.author.name}"
+        else:
+          name = f"{mention.name}"
+        embed.add_field(name="❌ Error!", value=f"{name} no longer has the required balance!", inline = False)
+        embed.colour = discord.Colour.red()
+        await msg.edit(embed=embed, components=[])
+        return
+      try:
+        await interaction.respond()
+      except:
+        pass
+      Vs.cooldown.append(ctx.author)
+      await gamemodes[game](self, ctx, mention, amount, data, msg)
+      if ctx.author in Vs.cooldown:
+        Vs.cooldown.remove(ctx.author)
   
-  async def flip_1v1(self, ctx, mention, amount, data):
-    user_dict = db["user_dict"]
+  
+  
+  async def flip_1v1(self, ctx, mention, amount, data, msg):
+    user_dict = await util.get_user_data()
     host = user_dict[str(ctx.author.id)]
     opponent = user_dict[str(mention.id)]
     host_bet = data["side"]
     
     flip = random.choice(["heads","tails"])
-      
-    if flip == "tails":
-      coin = "https://cdn.discordapp.com/attachments/894744339794780220/938857632712786010/sloan_tails_v6.png"
-    else:
-      coin = "https://cdn.discordapp.com/attachments/894744339794780220/938857632389799986/sloan_heads_v3.png"
     
     if flip == host_bet:
       winner = host
@@ -168,6 +236,8 @@ class Vs(commands.Cog):
       discord_loser = ctx.author
     
     winner["balance"] += amount
+    winner["total_cash_flow"] += amount
+    winner["daily_cash_flow"] += amount
     winner["stat_flip_profit"] += amount
     winner["stat_flip_win_streak"] += 1
     if winner["stat_flip_win_streak"] > winner["stat_highest_flip_win_streak"]:
@@ -176,10 +246,14 @@ class Vs(commands.Cog):
       winner["stat_highest_balance"] = winner["balance"]
     if amount > winner["stat_highest_flip"]:
       winner["stat_highest_flip"] = amount
+    if amount > winner["stat_flip_highest_win"]:
+      winner["stat_flip_highest_win"] = amount
     winner["stat_flip_quantity"] += 1
     winner["stat_flip_victory"] += 1
     
     loser["balance"] -= amount
+    loser["total_cash_flow"] += amount
+    loser["daily_cash_flow"] += amount
     loser["stat_flip_loss"] -= amount
     loser["stat_flip_win_streak"] = 0
     if amount > loser["stat_highest_flip"]:
@@ -187,33 +261,49 @@ class Vs(commands.Cog):
     loser["stat_flip_quantity"] += 1
     loser["stat_flip_defeat"] += 1
 
+    # Gambling Addict check.
+    user_dict, ga_embed = await rewards.gambling_addict_passive(ctx, discord_loser, user_dict)
+
+    await util.save_user_data(user_dict)
+
     winstreak = winner["stat_flip_win_streak"]
     winner_balance = winner["balance"]
     loser_balance = loser["balance"]
-    icon = discord_winner.avatar_url
+    icon = discord_winner.display_avatar.url
   
     embed = discord.Embed(
-    colour = discord.Colour.magenta(),
-    title = f":money_with_wings: Flip | {flip.capitalize()}")
-    embed.add_field(name = f"{discord_winner.name} wins!", value = f"**${amount:,}** has been added to {discord_winner.name}'s account!\n{discord_winner.name}'s new balance is $**{winner_balance:,}**.\n{discord_loser.name}'s new balance is $**{loser_balance:,}**.", inline = True)
+    colour = discord.Colour.green(),
+    title = f"💸 Flip 1v1 | {flip.capitalize()}")
+    embed.add_field(name = f"**{discord_winner.name} wins!**", value = f"**${amount:,}** has been added to {discord_winner.name}'s account!\n{discord_winner.name}'s new balance is **${winner_balance:,}**.\n{discord_loser.name}'s new balance is **${loser_balance:,}**.", inline = True)
     if winstreak >= 3:
       embed.add_field(name = f":tada: Win Streak!",value = f"{discord_winner.name} is on a **{winstreak}** flip win streak!", inline = False)
-    embed.set_thumbnail(url = coin)
+    embed.set_thumbnail(url = icon)
     embed.set_footer(icon_url = icon, text = f"{ctx.author.name} vs {mention.name}")
-    await ctx.channel.send(embed=embed)
+    await msg.edit(embed=embed, components=[])
+    # Gambling Addict embed.
+    if ga_embed != None:
+      await ctx.channel.send(embed=ga_embed)
   
   
   
   
-  async def trivia_1v1(self, ctx, mention, amount, data):
-    user_dict = db["user_dict"]
+  async def trivia_1v1(self, ctx, mention, amount:int, data, msg):
+    # Rob takes both players bets until the game is over.
+    user_dict = await util.get_user_data()
     host = user_dict[str(ctx.author.id)]
     opponent = user_dict[str(mention.id)]
+    rob = user_dict[str(906087821373239316)]
+    rob["balance"] += amount*2
+    host["balance"] -= amount
+    opponent["balance"] -= amount
+    # Gambling Addict check.
+    user_dict, ga_embed = await rewards.gambling_addict_passive(ctx, discord_loser, user_dict)
+    await util.save_user_data(user_dict)
     
     host_wins = 0
     opponent_wins = 0
+    time_out = False
     win_thresh = data["win_thresh"]
-    final_score = ""
     while win_thresh > host_wins and win_thresh > opponent_wins:
       url = f"https://opentdb.com/api.php?amount=1&category={data['category']}"
       req = requests.get(url)
@@ -222,7 +312,8 @@ class Vs(commands.Cog):
       embed = discord.Embed(
       colour = discord.Colour.green(),
       title = f"{data['emoji']} Trivia | {trivia['category']}",
-      description = f"Difficulty: **{trivia['difficulty'].capitalize()}**\n\n{html.unescape(trivia['question'])}")
+      description = f"{ctx.author.name} - **{host_wins}  VS  {opponent_wins}** - {mention.name}\nDifficulty: **{trivia['difficulty'].capitalize()}**\n\n{html.unescape(trivia['question'])}")
+      embed.set_footer(text = f"{ctx.author.name} vs {mention.name}")
       if trivia['type'] == "multiple":
         answer_list = []
         for item in trivia['incorrect_answers']:
@@ -231,84 +322,113 @@ class Vs(commands.Cog):
         random.shuffle(answer_list)
         
         answers = {"A":f"{answer_list[0]}","B":f"{answer_list[1]}","C":f"{answer_list[2]}","D":f"{answer_list[3]}"}
-        correct_answer = list(answers.keys())[list(answers.values()).index(html.unescape(trivia['correct_answer']))].lower()
-        embed.add_field(name = f"A.", value = f"{answers['A']}", inline = True)
-        embed.add_field(name = f"B.", value = f"{answers['B']}", inline = True)
-        embed.add_field(name = '\u200b', value = '\u200b', inline = True)
-        embed.add_field(name = f"C.", value = f"{answers['C']}", inline = True)
-        embed.add_field(name = f"D.", value = f"{answers['D']}", inline = True)
-        embed.add_field(name = '\u200b', value = '\u200b', inline = True)
+        correct_answer = list(answers.keys())[list(answers.values()).index(html.unescape(trivia['correct_answer']))]
+        await msg.edit(embed=embed, components=
+        [
+          [
+          Button(label=f"A. {answers['A']}", style="1", custom_id="A"),
+          Button(label=f"B. {answers['B']}", style="1", custom_id="B")
+          ],
+          [
+          Button(label=f"C. {answers['C']}", style="1", custom_id="C"),
+          Button(label=f"D. {answers['D']}", style="1", custom_id="D")
+          ]
+        ])
+        
       else:
-        embed.add_field(name = f"True or False?", value = '\u200b', inline = True)
-        correct_answer = trivia['correct_answer'].lower()
-      
-      await ctx.channel.send(embed=embed)
+        answers = {"True":"True","False":"False"}
+        correct_answer = trivia['correct_answer']
+        await msg.edit(embed=embed, components=
+        [
+          [
+          Button(label=f"True", style="1", custom_id="True"),
+          Button(label=f"False", style="1", custom_id="False")
+          ]
+        ])
     
-      def validate(m):
-        return m.author.id == mention.id and m.channel == ctx.channel or m.author.id == ctx.author.id and m.channel == ctx.channel
       try:
-        input = await self.client.wait_for("message",check=validate,timeout=120.0)
+        interaction = await self.client.wait_for(
+          "button_click", 
+          check = lambda i: i.user == ctx.author or i.user == mention, 
+          timeout=60
+          )
       except asyncio.TimeoutError:
-        Vs.cooldown.remove(ctx.author)
-        await util.embed_error(ctx,f"Challenge cancelled. No one answered in time.")
-        return
-      
-      print(f"{input.content.lower()},{correct_answer} by {input.author.name}")
-      wrong_message = ""
-      if input.content.lower() in correct_answer and len(input.attachments) <= 0 and len(input.stickers) <= 0:
-        right_answer = True
-        print("right answer")
-        emoji = "✅"
-        await input.add_reaction(emoji)
-        winner = input.author
-        icon = input.author.avatar_url
-        #if the host wins
-        if input.author.id == ctx.author.id:
+        embed.add_field(name="❌ Times Up!",value=f"No one answered the question in time!")
+        embed.colour = discord.Colour.red()
+        time_out = True
+        if host_wins == opponent_wins:
+          # Returns the bets.
+          user_dict = await util.get_user_data()
+          host = user_dict[str(ctx.author.id)]
+          opponent = user_dict[str(mention.id)]
+          rob = user_dict[str(906087821373239316)]
+          rob["balance"] -= amount*2
+          host["balance"] += amount
+          opponent["balance"] += amount
+          await util.save_user_data(user_dict)
+          
+          embed.description = f"**Draw!**\n{ctx.author.name} - **{host_wins}  VS  {opponent_wins}** - {mention.name}"
+          await msg.edit(embed=embed, components=[])
+          return
+        break
+        
+      try:
+        await interaction.respond()
+      except:
+        pass
+      extra_info = ""
+      if interaction.custom_id == correct_answer:
+        title = "✅ Correct"
+        colour = discord.Colour.green()
+        if interaction.user == ctx.author:
           host_wins +=1
-          winner_data = host
-          loser = mention
-          loser_data = opponent
-        #if the mentioned wins
-        elif input.author.id == mention.id:
+          round_winner = ctx.author
+        else:
           opponent_wins +=1
-          winner_data = opponent
-          loser = ctx.author
-          loser_data = host
-      
-      #if the messager got it wrong
+          round_winner = mention
       else:
-        right_answer = False
-        print("wrong answer")
-        emoji = "❌"
-        await input.add_reaction(emoji)
-        wrong_message = f"The correct answer was **{correct_answer.capitalize()}**!\n"
-        loser = input.author
-        if input.author.id == ctx.author.id:
+        title = "❌ Incorrect"
+        colour = discord.Colour.red()
+        loser = interaction.user
+        if loser == ctx.author:
+          extra_info = f"\n{ctx.author.name} guessed **{answers[interaction.custom_id]}**!"
           opponent_wins +=1
-          loser_data = host
-          winner = mention
-          icon = mention.avatar_url
-          winner_data = opponent
-        elif input.author.id == mention.id:
+          round_winner = mention
+        else:
+          extra_info = f"\n{mention.name} guessed **{answers[interaction.custom_id]}**!"
           host_wins +=1
-          loser_data = opponent
-          winner = ctx.author
-          icon = ctx.author.avatar_url
-          winner_data = host
-      
-      if len(data) >= 2 and host_wins <= win_thresh and opponent_wins <= win_thresh:
-        correct_message = ""
-        final_score = f"\n{ctx.author.name} - **{host_wins}  VS  {opponent_wins}** - {mention.name}\n\n"
-        if right_answer == False:
-          correct_message = f"The correct answer was **{correct_answer.capitalize()}**!"
-        if host_wins < win_thresh and opponent_wins < win_thresh:
-          await util.embed_message(ctx,"🎭","Score",f"{correct_message}\n\n{ctx.author.name} - **{host_wins}  VS  {opponent_wins}** - {mention.name}")
-        await asyncio.sleep(1.3)
-  
-    winner_data["balance"] += amount
+          round_winner = ctx.author
+
+      embed.add_field(name=f"**{title}!**",value=f"{round_winner.name} wins the round!\nThe correct answer was **{answers[correct_answer]}**!{extra_info}")
+      embed.colour = colour
+      await msg.edit(embed=embed, components=[])
+      await asyncio.sleep(2)
+
+    user_dict = await util.get_user_data()
+    host = user_dict[str(ctx.author.id)]
+    opponent = user_dict[str(mention.id)]
+    rob = user_dict[str(906087821373239316)]
+    if host_wins > opponent_wins:
+      winner = ctx.author
+      icon = ctx.author.display_avatar.url
+      winner_data = host
+      loser = mention
+      loser_data = opponent
+    else:
+      winner = mention
+      icon = mention.display_avatar.url
+      winner_data = opponent
+      loser = ctx.author
+      loser_data = host
+    rob["balance"] -= amount*2
+    winner_data["balance"] += amount*2
+    winner_data["total_cash_flow"] += amount
+    winner_data["daily_cash_flow"] += amount
     winner_data["stat_trivia_profit"] += amount
     winner_data["stat_trivia_victory"] += 1
-    loser_data["balance"] -= amount
+    
+    loser_data["total_cash_flow"] += amount
+    loser_data["daily_cash_flow"] += amount
     loser_data["stat_trivia_loss"] -= amount
     loser_data["stat_trivia_defeat"] += 1
     winner_data["stat_trivia_win_streak"] += 1
@@ -317,20 +437,26 @@ class Vs(commands.Cog):
       winner_data["stat_highest_trivia_win_streak"] = winner_data["stat_trivia_win_streak"]
     if winner_data["balance"] > winner_data["stat_highest_balance"]:
       winner_data["stat_highest_balance"] = winner_data["balance"]
-  
-    winner_balance = winner_data["balance"]
-    loser_balance = loser_data["balance"]
+
+    await util.save_user_data(user_dict)
+
+    desc = f"**{winner.name} wins!**\n"
+    desc+= f"{ctx.author.name} - **{host_wins}  VS  {opponent_wins}** - {mention.name}\n\n"
+
+    desc+=f"**${amount:,}** has been added to {winner.name}'s account!\n"
+    desc+=f"{winner.name}'s new balance is **${winner_data['balance']:,}**.\n"
+    desc+=f"{loser.name}'s new balance is **${loser_data['balance']:,}**."
+    if time_out == False:
+      embed.remove_field(0)
+    embed.description = desc
+    embed.set_thumbnail(url = icon)
+    embed.colour = discord.Colour.green()
     winstreak = winner_data["stat_trivia_win_streak"]
-  
-    embed = discord.Embed(
-    colour = discord.Colour.green(),
-    title = f":earth_asia: Trivia | {trivia['category']}")
-    embed.add_field(name = f"{winner.name} wins!", value = f"{wrong_message}{final_score}**${amount:,}** has been added to {winner.name}'s account!\n{winner.name}'s new balance is $**{winner_balance:,}**.\n{loser.name}'s new balance is $**{loser_balance:,}**.", inline = True)
     if winstreak >= 3:
-      embed.add_field(name = f":tada: Win Streak!",value = f"{winner.name} is on a **{winstreak}** trivia win streak!", inline = False)
-    embed.set_footer(icon_url = icon, text = f"{ctx.author.name} vs {mention.name}")
-    await ctx.channel.send(embed=embed)
-    Vs.cooldown.remove(ctx.author)
+      embed.add_field(name = f"🎉 Win Streak!",value = f"{winner.name} is on a **{winstreak:,}** trivia win streak!", inline = True)
+    await msg.edit(embed=embed, components=[])
+    if ga_embed != None:
+      await ctx.channel.send(embed=ga_embed)
   
   
   
@@ -347,5 +473,5 @@ class Vs(commands.Cog):
       message += f"**{count}.**  {emoji}  {key}\n"
     await util.embed_message(ctx,"🧠","Trivia Information", f"{command_help}\n**Trivia Categories:**\n{message}\n***TIP**: When choosing a category it's not necessary to type the full name.*")
 
-def setup(client):
-  client.add_cog(Vs(client))
+async def setup(client):
+  await client.add_cog(Vs(client))
